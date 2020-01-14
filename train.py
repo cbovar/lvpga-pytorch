@@ -1,6 +1,6 @@
 import argparse
 import math
-
+import numpy as np
 import torch
 from torch import optim
 from torch.nn import functional as F
@@ -97,13 +97,15 @@ def train(epoch, args, loader, model, optimizer, device):
             model.eval()
 
             with torch.no_grad():
-                recon, _, _ = model(img)
+                recon, mu, _ = model(img)
                 sample = model(
                     torch.randn(args.n_sample, args.dim_z, device=device), mode='dec'
                 )
+                interpol_mu = (mu[args.n_sample-1] * torch.from_numpy((np.arange(args.n_sample) / (args.n_sample-1)).reshape(args.n_sample, -1)).float().cuda()) + (mu[0] * torch.from_numpy(((1 - np.arange(args.n_sample) / (args.n_sample-1))).reshape(args.n_sample, -1)).float().cuda())
+                interpol = model(interpol_mu, mode='dec')
 
             samples = torch.cat(
-                [img[: args.n_sample], recon[: args.n_sample], sample[: args.n_sample]],
+                [img[: args.n_sample], recon[: args.n_sample], interpol[: args.n_sample], sample[: args.n_sample]],
                 0,
             )
 
@@ -120,12 +122,12 @@ def train(epoch, args, loader, model, optimizer, device):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch', type=int, default=64)
+    parser.add_argument('--batch', type=int, default=256)
     parser.add_argument('--epoch', type=int, default=100)
     parser.add_argument('--size', type=int, default=64)
     parser.add_argument('--dim', type=int, default=64)
     parser.add_argument('--dim_z', type=int, default=128)
-    parser.add_argument('--lr', type=float, default=0.4)
+    parser.add_argument('--lr', type=float, default=0.0002)
     parser.add_argument('--init', type=int, default=3)
     parser.add_argument('--z_rec', type=float, default=3e-2)
     parser.add_argument('--z_enc_rec', type=float, default=1e-2)
@@ -133,6 +135,7 @@ if __name__ == '__main__':
     parser.add_argument('--kl', type=float, default=5e-3)
     parser.add_argument('--nll', type=float, default=1e-2)
     parser.add_argument('--n_sample', type=int, default=20)
+    parser.add_argument('--ckpt', default='', help="path to checkpoint (to continue training)")
     parser.add_argument('path', type=str)
 
     device = 'cuda'
@@ -153,11 +156,18 @@ if __name__ == '__main__':
     loader = DataLoader(dataset, batch_size=args.batch, shuffle=True, num_workers=4)
 
     model = LVPGA(args.dim_z, args.dim, args.size)
+
+    if args.ckpt != '':
+        print(f'Load {args.ckpt}')
+        ckpt = torch.load(args.ckpt)
+        model.load_state_dict(ckpt['model'])
+        args = ckpt['args']
+
     print(model)
     model = model.to(device)
     model.train()
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, nesterov=True)
-    # optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    #optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, nesterov=True)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     for i in range(args.epoch):
         train(i, args, loader, model, optimizer, device)
